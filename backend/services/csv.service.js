@@ -16,6 +16,19 @@ const REQUIRED_COLUMNS = [
   'is_weekend',
 ];
 
+const COLUMN_ALIASES = {
+  transaction_id: ['transaction_id', 'id', 'txn_id', 'transactionId'],
+  date: ['date', 'Date', 'transaction_date', 'txn_date'],
+  merchant: ['merchant', 'Merchant', 'merchant_name', 'payee'],
+  category: ['category', 'Category', 'expense_category', 'type'],
+  amount: ['amount', 'Amount', 'total', 'value'],
+  payment_method: ['payment_method', 'paymentMethod', 'method', 'payment'],
+  city: ['city', 'City', 'location'],
+  hour: ['hour', 'Hour', 'time'],
+  weekday: ['weekday', 'Weekday', 'day'],
+  is_weekend: ['is_weekend', 'isWeekend', 'weekend'],
+};
+
 const csvService = {
   async processFile(req) {
     if (!req?.file?.path) {
@@ -69,10 +82,12 @@ const csvService = {
     }
 
     const firstRow = rows[0];
-    const missingColumns = REQUIRED_COLUMNS.filter((column) => !(column in firstRow));
+    const hasRecognizedColumns = REQUIRED_COLUMNS.some((column) => this.getColumnValue(firstRow, COLUMN_ALIASES[column]) !== undefined);
 
-    if (missingColumns.length > 0) {
-      throw buildError('The uploaded CSV is missing required columns.', { missingColumns });
+    if (!hasRecognizedColumns) {
+      throw buildError('The uploaded CSV is missing recognizable transaction columns.', {
+        expectedColumns: ['date', 'merchant', 'category', 'amount'],
+      });
     }
   },
 
@@ -81,16 +96,16 @@ const csvService = {
       .filter((row) => this.hasMeaningfulData(row))
       .map((row) => {
         const transaction = {
-          transaction_id: this.normalizeString(row.transaction_id),
-          date: this.normalizeString(row.date),
-          merchant: this.normalizeMerchant(row.merchant),
-          category: this.normalizeString(row.category),
-          amount: this.normalizeNumber(row.amount),
-          payment_method: this.normalizeString(row.payment_method),
-          city: this.normalizeString(row.city),
-          hour: this.normalizeNumber(row.hour),
-          weekday: this.normalizeWeekday(row.weekday),
-          is_weekend: this.normalizeBoolean(row.is_weekend),
+          transaction_id: this.normalizeString(this.getColumnValue(row, COLUMN_ALIASES.transaction_id)),
+          date: this.normalizeString(this.getColumnValue(row, COLUMN_ALIASES.date)),
+          merchant: this.normalizeMerchant(this.getColumnValue(row, COLUMN_ALIASES.merchant)),
+          category: this.normalizeString(this.getColumnValue(row, COLUMN_ALIASES.category)),
+          amount: this.normalizeNumber(this.getColumnValue(row, COLUMN_ALIASES.amount)),
+          payment_method: this.normalizeString(this.getColumnValue(row, COLUMN_ALIASES.payment_method)),
+          city: this.normalizeString(this.getColumnValue(row, COLUMN_ALIASES.city)),
+          hour: this.normalizeNumber(this.getColumnValue(row, COLUMN_ALIASES.hour)),
+          weekday: this.normalizeWeekday(this.getColumnValue(row, COLUMN_ALIASES.weekday)),
+          is_weekend: this.normalizeBoolean(this.getColumnValue(row, COLUMN_ALIASES.is_weekend)),
         };
 
         return transaction;
@@ -105,6 +120,20 @@ const csvService = {
     }
 
     return Object.values(row).some((value) => this.normalizeString(value) !== '');
+  },
+
+  getColumnValue(row, aliases = []) {
+    if (!row || typeof row !== 'object') {
+      return '';
+    }
+
+    for (const alias of aliases) {
+      if (alias in row) {
+        return row[alias];
+      }
+    }
+
+    return '';
   },
 
   normalizeString(value) {

@@ -2,7 +2,7 @@ import { useRef, useState } from 'react'
 import Papa from 'papaparse'
 import './UploadPanel.css'
 
-export default function UploadPanel({ onData, onUseSample, fileName }) {
+export default function UploadPanel({ onData, fileName, loading, serverError }) {
   const inputRef = useRef(null)
   const [dragActive, setDragActive] = useState(false)
   const [error, setError] = useState(null)
@@ -15,23 +15,32 @@ export default function UploadPanel({ onData, onUseSample, fileName }) {
       skipEmptyLines: true,
       complete: (results) => {
         const rows = results.data
-          .map((r) => ({
-            date: r.Date || r.date,
-            merchant: r.Merchant || r.merchant,
-            category: r.Category || r.category,
-            amount: Number(r.Amount || r.amount),
+          .map((row) => ({
+            transaction_id: row.transaction_id || row.id || row.txn_id || '',
+            date: row.Date || row.date || row.transaction_date || row.txn_date || '',
+            merchant: row.Merchant || row.merchant || row.merchant_name || row.payee || '',
+            category: row.Category || row.category || row.expense_category || row.type || '',
+            amount: Number(row.Amount || row.amount || row.total || row.value),
+            payment_method: row.payment_method || row.paymentMethod || row.method || '',
+            city: row.city || row.City || row.location || '',
+            hour: row.hour || row.Hour || '',
+            weekday: row.weekday || row.Weekday || '',
+            is_weekend: row.is_weekend || row.isWeekend || row.weekend || '',
           }))
-          .filter((r) => r.date && r.merchant && !Number.isNaN(r.amount))
+          .filter((row) => row.date && row.merchant && !Number.isNaN(row.amount))
 
         if (rows.length === 0) {
-          setError('Could not find valid rows. Expected columns: Date, Merchant, Category, Amount.')
+          setError('Could not find valid rows. Expected columns like Date, Merchant, Category, Amount.')
           return
         }
+
         onData(rows, file.name)
       },
       error: () => setError('Could not parse that file as CSV.'),
     })
   }
+
+  const displayError = serverError || error
 
   return (
     <div className="upload-panel card" id="upload-panel">
@@ -54,10 +63,7 @@ export default function UploadPanel({ onData, onUseSample, fileName }) {
 
         <div className="upload-actions">
           <button className="btn-primary" onClick={() => inputRef.current?.click()}>
-            Choose CSV
-          </button>
-          <button className="btn-ghost" onClick={onUseSample}>
-            Use sample data
+            {loading ? 'Analyzing…' : 'Choose CSV'}
           </button>
         </div>
 
@@ -70,10 +76,10 @@ export default function UploadPanel({ onData, onUseSample, fileName }) {
         />
       </div>
 
-      {error && <div className="upload-error">{error}</div>}
-      {fileName && !error && (
+      {displayError && <div className="upload-error">{displayError}</div>}
+      {fileName && !displayError && (
         <div className="upload-status mono">
-          <span className="upload-status-dot" /> Loaded {fileName}
+          <span className="upload-status-dot" /> {loading ? 'Analyzing upload…' : `Loaded ${fileName}`}
         </div>
       )}
     </div>

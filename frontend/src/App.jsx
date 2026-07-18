@@ -9,66 +9,107 @@ import SubscriptionsPanel from './components/SubscriptionsPanel.jsx'
 import AlertsPanel from './components/AlertsPanel.jsx'
 import PaymentChecker from './components/PaymentChecker.jsx'
 import AIInsights from './components/AIInsights.jsx'
-import {
-  SAMPLE_TRANSACTIONS,
-  categoryTotals,
-  detectRecurring,
-  detectDuplicates,
-  detectSpike,
-  financialHealthScore,
-  generateInsight,
-  answerFollowUp,
-} from './lib/analyze.js'
+import { answerFollowUp, checkPaymentRisk, generateInsight } from './lib/analyze.js'
+import { mapAnalysisToDashboard } from './lib/dashboard.js'
 import './App.css'
 
-function monthlyTrend(transactions) {
-  const byMonth = {}
-  for (const t of transactions) {
-    const m = t.date.slice(0, 7)
-    byMonth[m] = (byMonth[m] || 0) + Number(t.amount)
-  }
-  return Object.entries(byMonth)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([month, total]) => ({ month, total }))
-}
-
 export default function App() {
-  const [transactions, setTransactions] = useState(SAMPLE_TRANSACTIONS)
-  const [fileName, setFileName] = useState('sample-transactions.csv')
+  const [transactions, setTransactions] = useState([])
+  const [analysisPayload, setAnalysisPayload] = useState(null)
+  const [fileName, setFileName] = useState('')
   const [active, setActive] = useState('overview')
   const [riskResult, setRiskResult] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [insight, setInsight] = useState('Upload a transaction CSV to generate the first report.')
 
-  const totals = useMemo(() => categoryTotals(transactions), [transactions])
-  const recurring = useMemo(() => detectRecurring(transactions), [transactions])
-  const duplicates = useMemo(() => detectDuplicates(recurring), [recurring])
-  const spikes = useMemo(() => detectSpike(transactions), [transactions])
-  const trend = useMemo(() => monthlyTrend(transactions), [transactions])
+  const dashboard = useMemo(() => mapAnalysisToDashboard(analysisPayload), [analysisPayload])
+  const { totals, recurring, duplicates, spikes, trend, health, totalSpend, topCategory, avgTransaction, largestExpense, potentialSavings } = dashboard
 
-  const health = useMemo(
-    () => financialHealthScore({ totals, recurring, duplicates, spikes, riskScore: riskResult?.score }),
-    [totals, recurring, duplicates, spikes, riskResult]
-  )
-
-  const insight = useMemo(
+  const insightText = useMemo(
     () => generateInsight({ totals, spikes, recurring, duplicates, health, riskResult }),
     [totals, spikes, recurring, duplicates, health, riskResult]
   )
 
-  const totalSpend = Object.values(totals).reduce((a, b) => a + b, 0)
-  const topCategory = Object.entries(totals).sort((a, b) => b[1] - a[1])[0]
-  const avgTransaction = transactions.length ? totalSpend / transactions.length : 0
-  const largestExpense = transactions.reduce((max, t) => Math.max(max, Number(t.amount)), 0)
-  const potentialSavings = duplicates.reduce((sum, d) => sum + d.potentialSavings, 0)
+  const buildSummaryPayload = () => ({
+    overview: {
+      totalSpent: totalSpend,
+      totalTransactions: transactions.length,
+      subscriptionCount: recurring.length,
+      duplicateCount: duplicates.length,
+      healthScore: health.score,
+      healthGrade: health.score >= 80 ? 'A' : health.score >= 60 ? 'B' : 'C',
+    },
+    subscriptions: recurring,
+    duplicates,
+    health: { score: health.score, grade: health.score >= 80 ? 'A' : health.score >= 60 ? 'B' : 'C' },
+  })
 
-  const handleData = (rows, name) => {
+  const handleData = async (rows, name) => {
     setTransactions(rows)
     setFileName(name)
+    setError('')
     setRiskResult(null)
+    setLoading(true)
+
+    try {
+      const response = await fetch('/api/analysis', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transactions: rows }),
+      })
+
+      const payload = await response.json()
+      if (!response.ok || !payload?.success) {
+        throw new Error(payload?.message || 'Unable to analyze transactions.')
+      }
+
+      setAnalysisPayload(payload)
+      setInsight(generateInsight({ totals: payload?.data?.spendingAnalysis?.categoryTotals || {}, spikes: [], recurring: [], duplicates: [], health: { score: 0 }, riskResult: null }))
+
+      const gemmaResponse = await fetch('/api/gemma', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ summary: buildSummaryPayload() }),
+      })
+
+      if (gemmaResponse.ok) {
+        const gemmaPayload = await gemmaResponse.json()
+        const gemmaInsight = gemmaPayload?.data?.insight?.highlights?.join(' ') || insightText
+        setInsight(gemmaInsight)
+      } else {
+        setInsight(insightText)
+      }
+    } catch (err) {
+      setAnalysisPayload(null)
+      setError(err.message || 'Unable to analyze that file.')
+      setInsight('Upload a transaction CSV to generate the first report.')
+    } finally {
+      setLoading(false)
+    }
   }
 
   const handleAsk = async (question) => {
-    await new Promise((r) => setTimeout(r, 500))
-    return answerFollowUp(question, { totals, duplicates, recurring, spikes })
+    const fallback = answerFollowUp(question, { totals, duplicates, recurring, spikes })
+
+    try {
+      const response = await fetch('/api/gemma', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ summary: buildSummaryPayload() }),
+      })
+
+      if (!response.ok) {
+        return fallback
+      }
+
+      const payload = await response.json()
+      const gemmaInsight = payload?.data?.insight?.highlights?.join(' ') || fallback
+      setInsight(gemmaInsight)
+      return gemmaInsight
+    } catch {
+      return fallback
+    }
   }
 
   return (
@@ -77,7 +118,7 @@ export default function App() {
 
       <div className="app-main">
         <TopBar
-          fileName={fileName}
+          fileName={fileName || 'No file loaded'}
           onUploadClick={() => document.getElementById('upload-panel')?.scrollIntoView({ behavior: 'smooth' })}
         />
 
@@ -94,7 +135,7 @@ export default function App() {
               potentialSavings={potentialSavings}
             />
             <div className="section-spacer" />
-            <UploadPanel onData={handleData} onUseSample={() => handleData(SAMPLE_TRANSACTIONS, 'sample-transactions.csv')} fileName={fileName} />
+            <UploadPanel onData={handleData} fileName={fileName} loading={loading} serverError={error} />
           </section>
 
           <section id="charts" className="section">
