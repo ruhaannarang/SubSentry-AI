@@ -9,7 +9,8 @@ import SubscriptionsPanel from './components/SubscriptionsPanel.jsx'
 import AlertsPanel from './components/AlertsPanel.jsx'
 import PaymentChecker from './components/PaymentChecker.jsx'
 import AIInsights from './components/AIInsights.jsx'
-import { answerFollowUp, checkPaymentRisk, generateInsight } from './lib/analyze.js'
+import { answerFollowUp, generateInsight } from './lib/analyze.js'
+import { fetchJson } from './lib/api.js'
 import { mapAnalysisToDashboard } from './lib/dashboard.js'
 import './App.css'
 
@@ -53,29 +54,23 @@ export default function App() {
     setLoading(true)
 
     try {
-      const response = await fetch('/api/analysis', {
+      const payload = await fetchJson('/api/analysis', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ transactions: rows }),
       })
 
-      const payload = await response.json()
-      if (!response.ok || !payload?.success) {
-        throw new Error(payload?.message || 'Unable to analyze transactions.')
-      }
-
       setAnalysisPayload(payload)
       setInsight(generateInsight({ totals: payload?.data?.spendingAnalysis?.categoryTotals || {}, spikes: [], recurring: [], duplicates: [], health: { score: 0 }, riskResult: null }))
 
-      const gemmaResponse = await fetch('/api/gemma', {
+      const gemmaPayload = await fetchJson('/api/gemma', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ summary: buildSummaryPayload() }),
-      })
+      }).catch(() => null)
 
-      if (gemmaResponse.ok) {
-        const gemmaPayload = await gemmaResponse.json()
-        const gemmaInsight = gemmaPayload?.data?.insight?.highlights?.join(' ') || insightText
+      if (gemmaPayload?.data?.insight?.highlights) {
+        const gemmaInsight = gemmaPayload.data.insight.highlights.join(' ') || insightText
         setInsight(gemmaInsight)
       } else {
         setInsight(insightText)
@@ -93,17 +88,12 @@ export default function App() {
     const fallback = answerFollowUp(question, { totals, duplicates, recurring, spikes })
 
     try {
-      const response = await fetch('/api/gemma', {
+      const payload = await fetchJson('/api/gemma', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ summary: buildSummaryPayload() }),
-      })
+      }).catch(() => null)
 
-      if (!response.ok) {
-        return fallback
-      }
-
-      const payload = await response.json()
       const gemmaInsight = payload?.data?.insight?.highlights?.join(' ') || fallback
       setInsight(gemmaInsight)
       return gemmaInsight
